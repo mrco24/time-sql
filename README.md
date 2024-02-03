@@ -3,7 +3,7 @@
 
 go run g.go -u https://molkenmusic.com/store/shop/index.php?cat=dvds -p payloads.txt -v -o p.txt
 
-go install github.com/tomnomnom/time-sql@latest
+go install github.com/mrco24/time-sql@latest
 
 cp -r /root/go/bin/time-sql /usr/local/bin
 
