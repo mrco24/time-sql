@@ -1,149 +1,122 @@
 package main
 
 import (
-	"bufio"
 	"flag"
 	"fmt"
-	"log"
+	"io/ioutil"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
-
-	"github.com/fatih/color"
 )
 
-var (
-	payloadsPath string
-	urlsPath     string
-	url          string
-	outputPath   string
-	verbose      bool
-	threads      int
-)
+var mu sync.Mutex
 
-func init() {
-	flag.StringVar(&payloadsPath, "p", "", "Path to the payloads file")
-	flag.StringVar(&urlsPath, "l", "", "Path to the URLs file")
-	flag.StringVar(&url, "u", "", "Single URL to test with all payloads")
-	flag.StringVar(&outputPath, "o", "", "Path to the output file")
-	flag.BoolVar(&verbose, "v", false, "Run in verbose mode")
-	flag.IntVar(&threads, "t", 1, "Number of concurrent threads")
-	flag.Parse()
-}
+func performRequest(url string, data string, cookie string) (bool, string, float64, error) {
+	urlWithData := fmt.Sprintf("%s%s", url, data)
+	startTime := time.Now()
 
-// checkVulnerability checks if a URL with a specific payload is vulnerable
-func checkVulnerability(url string, payload string, outputFile *os.File, wg *sync.WaitGroup) {
-	defer wg.Done()
-
-	client := &http.Client{
-		Timeout: 60 * time.Second,
-	}
-
-	req, err := http.NewRequest("GET", url, nil)
+	client := &http.Client{}
+	req, err := http.NewRequest("GET", urlWithData, nil)
 	if err != nil {
-		log.Fatal(err)
+		return false, urlWithData, 0, err
 	}
 
-	req.Header.Set("User-Agent", payload)
+	if cookie != "" {
+		req.Header.Add("Cookie", cookie)
+	}
 
-	start := time.Now()
-	res, err := client.Do(req)
-	elapsed := time.Since(start).Seconds()
-
+	response, err := client.Do(req)
 	if err != nil {
-		log.Printf("The request was not successful due to: %v\n", err)
-		return
+		return false, urlWithData, 0, err
 	}
+	defer response.Body.Close()
 
-	defer res.Body.Close()
+	responseTime := time.Since(startTime).Seconds()
 
-	// Create color instances
-	urlColor := color.New(color.FgCyan)
-	payloadColor := color.New(color.FgMagenta)
-	timeColor := color.New(color.FgBlue)
-	statusColor := color.New(color.FgGreen)
-
-	// Apply colors to each part of the result
-	urlColor.Printf("Testing for URL: %s\n", url)
-	payloadColor.Printf("Payload: %s\n", payload)
-	timeColor.Printf("Response Time: %.2f seconds\n", elapsed)
-
-	result := ""
-	if elapsed >= 20 && elapsed <= 25 {
-		statusColor.Printf("Status: Vulnerable\n\n")
-		result = "Vulnerable"
-	} else {
-		statusColor.Printf("Status: Not Vulnerable\n\n")
-		result = "Not Vulnerable"
-	}
-
-	if outputFile != nil {
-		outputFile.WriteString(fmt.Sprintf("URL: %s, Payload: %s, Response Time: %.2f seconds, Status: %s\n",
-			url, payload, elapsed, result))
-	}
+	return true, urlWithData, responseTime, nil
 }
 
 func main() {
-	if payloadsPath == "" {
-		fmt.Println("Error: Payloads file path is required.")
-		return
+	urlsFile := flag.String("l", "", "url list GET.")
+	dataFile := flag.String("p", "", "paylode list.")
+	cookie := flag.String("c", "", "Cookie GET.")
+	outputFile := flag.String("o", "", "output 20 second.")
+	flag.Parse()
+
+	if *urlsFile == "" || *dataFile == "" {
+		fmt.Println("Debe proporcionar archivos de URLs y datos.")
+		flag.PrintDefaults()
+		os.Exit(1)
 	}
 
-	payloads := readLines(payloadsPath)
+	urlsContent, err := ioutil.ReadFile(*urlsFile)
+	if err != nil {
+		fmt.Println("Error leyendo el archivo de URLs:", err)
+		os.Exit(1)
+	}
+	urls := string(urlsContent)
+	urlList := splitLines(urls)
 
-	if outputPath != "" {
-		outputFile, err := os.Create(outputPath)
-		if err != nil {
-			log.Fatal(err)
+	dataContent, err := ioutil.ReadFile(*dataFile)
+	if err != nil {
+		fmt.Println("Error leyendo el archivo de datos:", err)
+		os.Exit(1)
+	}
+	data := string(dataContent)
+	dataList := splitLines(data)
+
+	var outputLines []string
+	var vulnerableURLs []string
+
+	for _, url := range urlList {
+		// Skip testing payloads on URLs that are already marked as vulnerable
+		if contains(vulnerableURLs, url) {
+			fmt.Printf("Skipping payloads on vulnerable URL: %s\n", url)
+			continue
 		}
-		defer outputFile.Close()
 
-		if url != "" {
-			var wg sync.WaitGroup
-			for _, payload := range payloads {
-				wg.Add(1)
-				go checkVulnerability(url, payload, outputFile, &wg)
-			}
-			wg.Wait()
-		} else if urlsPath != "" {
-			urls := readLines(urlsPath)
+		for _, d := range dataList {
+			success, urlWithData, responseTime, errorMessage := performRequest(url, d, *cookie)
 
-			var wg sync.WaitGroup
-			for _, u := range urls {
-				for _, payload := range payloads {
-					wg.Add(1)
-					go checkVulnerability(u, payload, outputFile, &wg)
+			if success && responseTime <= 20 {
+				fmt.Printf("\033[1;32mURL %s - %.2f second\033[0m\n", urlWithData, responseTime)
+			} else {
+				outputLine := fmt.Sprintf("\033[1;31mURL %s - %.2f second - Error: %v\033[0m", urlWithData, responseTime, errorMessage)
+				fmt.Println(outputLine)
+				outputLines = append(outputLines, outputLine)
+
+				if success && responseTime > 20 {
+					fmt.Printf("\033[1;33mURL %s is vulnerable!\033[0m\n", urlWithData)
+					vulnerableURLs = append(vulnerableURLs, url)
+					break // Stop testing payloads on this URL once it's marked as vulnerable
 				}
 			}
-			wg.Wait()
-		} else {
-			fmt.Println("Error: URLs file path is required.")
 		}
-	} else {
-		fmt.Println("Error: Output file path is required.")
+	}
+
+	// Write results to the output file if specified
+	if *outputFile != "" {
+		outputContent := strings.Join(outputLines, "\n")
+		err := ioutil.WriteFile(*outputFile, []byte(outputContent), 0644)
+		if err != nil {
+			fmt.Println("Error writing results to the output file:", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Results written to %s\n", *outputFile)
 	}
 }
 
-func readLines(filePath string) []string {
-	lines := []string{}
+func splitLines(s string) []string {
+	return strings.Split(strings.TrimSpace(s), "\n")
+}
 
-	file, err := os.Open(filePath)
-	if err != nil {
-		log.Fatal(err)
+func contains(slice []string, str string) bool {
+	for _, item := range slice {
+		if item == str {
+			return true
+		}
 	}
-	defer file.Close()
-
-	scanner := bufio.NewScanner(file)
-
-	for scanner.Scan() {
-		line := scanner.Text()
-		lines = append(lines, line)
-	}
-
-	if err := scanner.Err(); err != nil {
-		log.Fatal(err)
-	}
-
-	return lines
+	return false
 }
