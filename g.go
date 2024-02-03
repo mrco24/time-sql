@@ -70,7 +70,7 @@ func checkVulnerability(url string, payload string, outputFile *os.File, wg *syn
 	timeColor.Printf("Response Time: %.2f seconds\n", elapsed)
 
 	result := ""
-	if elapsed >= 25 && elapsed <= 50 {
+	if elapsed >= 20 && elapsed <= 25 {
 		statusColor.Printf("Status: Vulnerable\n\n")
 		result = "Vulnerable"
 	} else {
