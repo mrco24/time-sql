@@ -45,7 +45,7 @@ func performRequest(url string, data string, cookie string, wg *sync.WaitGroup, 
 
 	if responseTime <= 20 {
 		fmt.Printf("\033[1;32mURL %s - %.2f seconds\033[0m\n", urlWithData, responseTime)
-	} else {
+	} else if responseTime <= 30 { // Skip URLs taking more than 30 seconds
 		fmt.Printf("\033[1;31mURL %s - %.2f seconds - Vulnerable!\033[0m\n", urlWithData, responseTime)
 		vulnerableURLs <- urlWithData
 
@@ -56,7 +56,10 @@ func performRequest(url string, data string, cookie string, wg *sync.WaitGroup, 
 			// Send result data with URL and response time
 			result <- fmt.Sprintf("%s|%.2f", urlWithData, responseTime)
 		}
+	} else {
+		fmt.Printf("\033[1;33mURL %s - %.2f seconds - Skipped (over 30 seconds)\033[0m\n", urlWithData, responseTime)
 	}
+
 	<-ch
 }
 
